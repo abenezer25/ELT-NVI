@@ -18,10 +18,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// TUNING: Larger batch sizes work better with PGX CopyFrom
 const batchSize = 5000
 
-// METRICS
 const (
 	sourceTableName   = "Sales"
 	targetTableName   = "salesdb"
@@ -32,8 +30,8 @@ type Metric struct {
 	StartTime         time.Time     `bson:"startTime"`
 	EndTime           time.Time     `bson:"endTime"`
 	TotalDuration     time.Duration `bson:"totalDuration"`
-	ExtractionTime    time.Duration `bson:"extractionTime"` // Time spent reading
-	LoadTime          time.Duration `bson:"loadTime"`       // Time spent writing
+	ExtractionTime    time.Duration `bson:"extractionTime"` 
+	LoadTime          time.Duration `bson:"loadTime"`      
 	Status            string        `bson:"status"`
 	TotalRowsMigrated int           `bson:"totalRowsMigrated"`
 	BatchesProcessed  int           `bson:"batchesProcessed"`
@@ -41,14 +39,13 @@ type Metric struct {
 	ErrorMessage      string        `bson:"errorMessage,omitempty"`
 }
 
-// DataRow represents the cleaned, transformed data ready for Postgres
 type DataRow struct {
 	FsNo            string
 	SaleType        string
 	AttachmentNo    string
 	Customer        string
 	Region          string
-	Date            time.Time // Normalized to Time
+	Date            time.Time 
 	Code            string
 	Name            string
 	MeasurementUnit string
@@ -65,7 +62,7 @@ func main() {
 		Status:    "FAILURE",
 	}
 
-	// 1. Load Config
+	// Load Config
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("Error loading .env file: %v", err)
 	}
@@ -78,22 +75,21 @@ func main() {
 		log.Fatal("Environment variables missing.")
 	}
 
-	// 2. Connect MongoDB
+	// Connect MongoDB
 	mongoClient, err := connectMongo(mongoURI, mongoDBName)
 	if err != nil {
 		log.Fatalf("Mongo Error: %v", err)
 	}
 	defer mongoClient.Disconnect(context.TODO())
 
-	// 3. Connect MSSQL (Source)
+	// Connect MSSQL (Source)
 	sourceDB, err := sql.Open("sqlserver", mssqlDSN)
 	if err != nil {
 		log.Fatalf("MSSQL Error: %v", err)
 	}
 	defer sourceDB.Close()
 
-	// 4. Connect PostgreSQL (Target) using PGX Pool
-	// PGX Pool is thread-safe and handles connections automatically
+	// Connect PostgreSQL 
 	pgConfig, err := pgxpool.ParseConfig(postgresDSN)
 	if err != nil {
 		log.Fatalf("Postgres Config Error: %v", err)
@@ -106,12 +102,10 @@ func main() {
 	}
 	defer targetPool.Close()
 
-	// Prepare Target Table
 	if err := ensureTargetTable(targetPool); err != nil {
 		log.Fatalf("Table Init Error: %v", err)
 	}
 
-	// 5. Run ETL Pipeline
 	runPipeline(sourceDB, targetPool, mongoClient, mongoDBName, metrics)
 }
 
@@ -123,12 +117,10 @@ func runPipeline(source *sql.DB, target *pgxpool.Pool, mClient *mongo.Client, mD
 		log.Printf("Pipeline Finished. Rows: %d, Duration: %v", metrics.TotalRowsMigrated, metrics.TotalDuration)
 	}()
 
-	// Channel to pass batches from Extractor to Loader
-	// Buffered to prevent the extractor from blocking immediately
 	batchChan := make(chan []DataRow, 5)
 	var wg sync.WaitGroup
 
-	// --- WORKER 1: EXTRACTOR ---
+	// WORKER 1: EXTRACTOR 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -142,11 +134,10 @@ func runPipeline(source *sql.DB, target *pgxpool.Pool, mClient *mongo.Client, mD
 		}
 
 		metrics.ExtractionTime = time.Since(extractStart)
-		close(batchChan) // Signal loader that no more data is coming
+		close(batchChan) 
 	}()
 
-	// --- WORKER 2: LOADER ---
-	// We run the loader in the main thread (or wait for it here)
+	// WORKER 2: LOADER 
 	loadStart := time.Now()
 	err := loadBatches(target, batchChan, metrics)
 	if err != nil {
@@ -158,12 +149,10 @@ func runPipeline(source *sql.DB, target *pgxpool.Pool, mClient *mongo.Client, mD
 	}
 	metrics.LoadTime = time.Since(loadStart)
 
-	wg.Wait() // Wait for extractor to fully finish cleaning up
-}
+	wg.Wait() 
 
 func extractAndBatch(db *sql.DB, outChan chan<- []DataRow, metrics *Metric) error {
-	// Removed ORDER BY unless strictly necessary. ORDER BY creates a massive sort cost on SQL Server.
-	// If you need order, keep it, but for pure migration, removing it is faster.
+
 	query := fmt.Sprintf(`
         SELECT fsno, salestype, attachmentno, customer, region, date, code, name, measurementunit, unitprice, soldquantity, netpay
         FROM %s`, sourceTableName)
@@ -201,7 +190,6 @@ func extractAndBatch(db *sql.DB, outChan chan<- []DataRow, metrics *Metric) erro
 		r.SoldQuantity = sq.Float64
 		r.NetPay = np.Float64
 
-		// Date Parsing
 		if dateStr.Valid && dateStr.String != "" {
 			t, err := time.Parse("1/2/2006", dateStr.String)
 			if err == nil {
@@ -213,11 +201,10 @@ func extractAndBatch(db *sql.DB, outChan chan<- []DataRow, metrics *Metric) erro
 
 		if len(batch) >= batchSize {
 			outChan <- batch
-			batch = make([]DataRow, 0, batchSize) // Allocate new slice for next batch
+			batch = make([]DataRow, 0, batchSize)
 		}
 	}
 
-	// Send remaining items
 	if len(batch) > 0 {
 		outChan <- batch
 	}
@@ -231,8 +218,6 @@ func loadBatches(pool *pgxpool.Pool, inChan <-chan []DataRow, metrics *Metric) e
 	for batch := range inChan {
 		start := time.Now()
 
-		// Convert struct slice to interface slice for pgx
-		// This is the format pgx.CopyFrom expects (rows of values)
 		rows := make([][]interface{}, len(batch))
 		for i, row := range batch {
 			rows[i] = []interface{}{
@@ -242,8 +227,6 @@ func loadBatches(pool *pgxpool.Pool, inChan <-chan []DataRow, metrics *Metric) e
 			}
 		}
 
-		// PGX CopyFrom: The "Magic" Speed Boost
-		// This bypasses SQL parsing and streams binary data
 		count, err := pool.CopyFrom(
 			ctx,
 			pgx.Identifier{targetTableName},
@@ -254,8 +237,6 @@ func loadBatches(pool *pgxpool.Pool, inChan <-chan []DataRow, metrics *Metric) e
 		if err != nil {
 			log.Printf("Failed to Copy batch: %v", err)
 			metrics.ErrorCount += len(batch)
-			// Decide here: return err to stop pipeline, or continue to next batch?
-			// returning err stops everything.
 			return fmt.Errorf("bulk load failed: %w", err)
 		}
 
@@ -269,7 +250,7 @@ func loadBatches(pool *pgxpool.Pool, inChan <-chan []DataRow, metrics *Metric) e
 	return nil
 }
 
-// --- Helpers ---
+// Helpers 
 
 func ensureTargetTable(pool *pgxpool.Pool) error {
 	createTableSQL := fmt.Sprintf(`

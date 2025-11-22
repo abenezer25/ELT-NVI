@@ -15,7 +15,7 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	// Load .env file, but don't panic if missing (e.g. in Docker)
+	// Load .env file if exists
 	_ = godotenv.Load()
 
 	cfg := &Config{
