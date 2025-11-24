@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -15,8 +16,19 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	// Load .env file if exists
-	_ = godotenv.Load()
+
+	envPaths := []string{".env", "../.env", "../../.env"}
+	loaded := false
+	for _, p := range envPaths {
+		if err := godotenv.Load(p); err == nil {
+			log.Printf("Loaded env from %s", p)
+			loaded = true
+			break
+		}
+	}
+	if !loaded {
+		log.Printf("No .env file found in %v; relying on environment variables", envPaths)
+	}
 
 	cfg := &Config{
 		MSSQLDSN:    os.Getenv("MSSQL_CONN"),
@@ -25,8 +37,21 @@ func Load() (*Config, error) {
 		MongoDBName: os.Getenv("MONGO_DB_NAME"),
 	}
 
-	if cfg.MSSQLDSN == "" || cfg.PostgresDSN == "" || cfg.MongoURI == "" {
-		return nil, fmt.Errorf("missing required environment variables")
+	missing := []string{}
+	if cfg.MSSQLDSN == "" {
+		missing = append(missing, "MSSQL_CONN")
+	}
+	if cfg.PostgresDSN == "" {
+		missing = append(missing, "POSTGRES_CONN")
+	}
+	if cfg.MongoURI == "" {
+		missing = append(missing, "MONGO_URI")
+	}
+	if cfg.MongoDBName == "" {
+		missing = append(missing, "MONGO_DB_NAME")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required environment variables: %v", missing)
 	}
 
 	return cfg, nil
